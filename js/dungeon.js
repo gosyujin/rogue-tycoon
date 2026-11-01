@@ -13,6 +13,14 @@ export function isWalkable(ch) {
   return ch === '.' || ch === '+' || ch === '>';
 }
 
+// (x,y) から (dx,dy) 方向へ 1 歩動けるか。斜めは壁の角をまたげない
+export function canStep(tiles, x, y, dx, dy) {
+  const at = (px, py) => isWalkable(tiles[py]?.[px] ?? ' ');
+  if (!at(x + dx, y + dy)) return false;
+  if (dx !== 0 && dy !== 0 && (!at(x + dx, y) || !at(x, y + dy))) return false;
+  return true;
+}
+
 function makeRoom(rng, cx, cy) {
   const w = rng.int(5, 13);
   const h = rng.int(4, 6);
