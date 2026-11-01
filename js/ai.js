@@ -37,6 +37,10 @@ export function monstersAct(state, rng, onAttack) {
   const free = (x, y) => !occupied.has(y * MAP_W + x) && !(x === state.x && y === state.y);
 
   for (const m of state.monsters) {
+    if (m.sleep > 0) {
+      m.sleep--;
+      continue;
+    }
     const d = dist[m.y][m.x];
     const dx = state.x - m.x;
     const dy = state.y - m.y;
