@@ -11,6 +11,9 @@ export function makeRng(seed) {
   };
   return {
     next,
+    // セーブ/ロード用に内部状態を出し入れする
+    getState: () => a,
+    setState: (s) => { a = s >>> 0; },
     // lo..hi の整数 (両端含む)
     int: (lo, hi) => lo + Math.floor(next() * (hi - lo + 1)),
     pick: (arr) => arr[Math.floor(next() * arr.length)],

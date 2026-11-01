@@ -3,12 +3,18 @@
 const el = document.getElementById('menu');
 
 // rows: [{ label, onTap }], back: { label, onTap }
-export function openMenu({ title, rows, back }) {
+export function openMenu({ title, rows, back, lines = [] }) {
   el.innerHTML = '';
   const head = document.createElement('div');
   head.className = 'menu-title';
   head.textContent = title;
   el.appendChild(head);
+  for (const text of lines) {
+    const p = document.createElement('div');
+    p.className = 'menu-line';
+    p.textContent = text;
+    el.appendChild(p);
+  }
   for (const row of rows) {
     const b = document.createElement('button');
     b.className = 'row';

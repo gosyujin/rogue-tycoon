@@ -107,7 +107,7 @@ function weighted(rng, table) {
   return table[table.length - 1][0];
 }
 
-const TYPE_WEIGHTS = [['food', 22], ['herb', 26], ['scroll', 22], ['staff', 8], ['weapon', 11], ['shield', 11]];
+const TYPE_WEIGHTS = [['food', 18], ['herb', 26], ['scroll', 22], ['staff', 8], ['weapon', 11], ['shield', 11]];
 
 function rollKind(rng, floor) {
   const type = weighted(rng, TYPE_WEIGHTS);

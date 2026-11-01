@@ -69,6 +69,7 @@ body {
 }
 #menu[hidden] { display: none; }
 #menu .menu-title { color: var(--accent); font-size: 14px; padding: 2px 4px; }
+#menu .menu-line { font-size: 15px; line-height: 1.6; padding: 0 4px; }
 #menu button.row {
   flex: none;
   text-align: left;
@@ -93,6 +94,7 @@ body {
 #map .s { color: #ec6; }
 #map .x { color: #333; }
 #map .c { color: #a98; }
+#map .t { color: #e5a; }
 #map .d { opacity: 0.45; }
 
 #log {

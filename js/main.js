@@ -2,7 +2,8 @@ import { VIEW_W, VIEW_H, fitFont, drawMap, drawStatus, drawLog } from './render.
 import { bindInput } from './input.js';
 import { makeRng } from './rng.js';
 import { MAP_W, MAP_H, generateFloor, canStep, isWalkable } from './dungeon.js';
-import { spawnInitial, spawnOne } from './monsters.js';
+import { spawnInitial, spawnOne, summonAround, monsterFromSave } from './monsters.js';
+import { TRAPS, spawnTraps } from './traps.js';
 import { monstersAct } from './ai.js';
 import {
   ITEMS, SYMBOL, INV_MAX, SATIETY_MAX,
@@ -17,9 +18,12 @@ const MAX_MONSTERS = 10;
 const STAFF_RANGE = 10;
 const THROW_RANGE = 8;
 
-// ?seed=123 で同じダンジョンを再現できる
-const params = new URLSearchParams(location.search);
-const seed = Number(params.get('seed')) || (Date.now() & 0x7fffffff);
+const SAVE_KEY = 'rogue-tycoon-save';
+const BEST_KEY = 'rogue-tycoon-best';
+
+// ?seed=123 で同じダンジョンを再現できる(指定時はセーブを使わず新規開始)
+const urlSeed = Number(new URLSearchParams(location.search).get('seed')) || 0;
+const newSeed = () => urlSeed || (Date.now() & 0x7fffffff);
 
 const state = {};
 let rng; // 戦闘など実行中の乱数(階層生成とは別)
@@ -47,21 +51,23 @@ function playerDef() {
   return s ? ITEMS[s.kind].def + s.plus : 0;
 }
 
-function resetRun() {
+function blankState(seed) {
   Object.assign(state, {
     seed,
     floor: 1,
     turn: 0,
     x: 0, y: 0,
-    hp: 30, maxHp: 30, lv: 1, exp: 0, str: 8, gold: 0,
+    hp: 30, maxHp: 30, lv: 1, exp: 0, str: 8, gold: 0, kills: 0,
     satiety: SATIETY_MAX,
     dead: false,
+    cleared: false,
     log: [],
     map: null,
     seen: null,
     visible: null,
     monsters: [],
     items: [],
+    traps: [],
     inv: [],
     identified: new Set(),
     labels: makeLabels(makeRng(seed ^ 0x51ed)),
@@ -70,6 +76,10 @@ function resetRun() {
   aim = null;
   selecting = false;
   closeMenu();
+}
+
+function resetRun() {
+  blankState(newSeed());
   state.inv.push(
     { kind: 'sword0', plus: 0, equipped: true },
     { kind: 'shield0', plus: 0, equipped: true },
@@ -88,6 +98,7 @@ function newFloor() {
   state.map = generateFloor(genRng);
   state.monsters = spawnInitial(genRng, state.floor, state.map);
   state.items = spawnItems(genRng, state.floor, state.map);
+  state.traps = spawnTraps(genRng, state.floor, state.map, state.items);
   state.x = state.map.start.x;
   state.y = state.map.start.y;
   state.seen = Array.from({ length: MAP_H }, () => Array(MAP_W).fill(false));
@@ -123,6 +134,7 @@ function viewRows() {
   const y0 = Math.max(0, Math.min(MAP_H - VIEW_H, state.y - (VIEW_H >> 1)));
   const monsterAt = new Map(state.monsters.map((m) => [m.y * MAP_W + m.x, m]));
   const floorItems = new Map(state.items.map((f) => [f.y * MAP_W + f.x, f]));
+  const trapAt = new Map(state.traps.filter((t) => t.revealed).map((t) => [t.y * MAP_W + t.x, t]));
   const rows = [];
   for (let y = y0; y < y0 + VIEW_H; y++) {
     let text = '';
@@ -139,6 +151,9 @@ function viewRows() {
         dim += '0';
       } else if (f && state.seen[y][x]) {
         text += itemChar(f);
+        dim += state.visible[y][x] ? '0' : '1';
+      } else if (trapAt.has(key) && state.seen[y][x]) {
+        text += '^';
         dim += state.visible[y][x] ? '0' : '1';
       } else if (state.seen[y][x]) {
         text += state.map.tiles[y][x];
@@ -161,6 +176,77 @@ function render() {
   );
   drawMap(viewRows());
   drawLog(state.log);
+  save();
+}
+
+const over = () => state.dead || state.cleared;
+
+function readBest() {
+  try {
+    return Number(localStorage.getItem(BEST_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function recordBest() {
+  const best = Math.max(readBest(), state.floor);
+  try {
+    localStorage.setItem(BEST_KEY, String(best));
+  } catch { /* 保存できない環境では記録しない */ }
+  return best;
+}
+
+function removeSave() {
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch { /* 無視 */ }
+}
+
+// 階の地形はシードから再生成できるので、変化する部分だけを保存する
+function save() {
+  if (over()) return;
+  const data = {
+    v: 1,
+    seed: state.seed,
+    rngState: rng.getState(),
+    ...Object.fromEntries(
+      ['floor', 'turn', 'x', 'y', 'hp', 'maxHp', 'lv', 'exp', 'str', 'gold', 'kills', 'satiety', 'log', 'items', 'traps', 'inv', 'labels']
+        .map((k) => [k, state[k]])
+    ),
+    identified: [...state.identified],
+    monsters: state.monsters.map((m) => ({ ch: m.ch, hp: m.hp, x: m.x, y: m.y, sleep: m.sleep || 0 })),
+    seen: state.seen.map((row) => row.map((b) => (b ? 1 : 0)).join('')),
+  };
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch { /* 保存できない環境では中断セーブなしで遊ぶ */ }
+}
+
+// セーブがあれば復元して true
+function load() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    if (d.v !== 1) return false;
+    blankState(d.seed);
+    rng.setState(d.rngState);
+    Object.assign(state, {
+      floor: d.floor, turn: d.turn, x: d.x, y: d.y, hp: d.hp, maxHp: d.maxHp, lv: d.lv, exp: d.exp,
+      str: d.str, gold: d.gold, kills: d.kills, satiety: d.satiety, log: d.log,
+      items: d.items, traps: d.traps, inv: d.inv, labels: d.labels,
+      identified: new Set(d.identified),
+      monsters: d.monsters.map(monsterFromSave),
+    });
+    state.map = generateFloor(makeRng(state.seed + state.floor * 7919));
+    state.seen = d.seen.map((row) => [...row].map((c) => c === '1'));
+    updateVisibility();
+    return true;
+  } catch {
+    removeSave();
+    return false;
+  }
 }
 
 function damage(atk, def) {
@@ -194,6 +280,7 @@ function hitMonster(m, dmg, text) {
     return;
   }
   state.monsters = state.monsters.filter((o) => o !== m);
+  state.kills++;
   say(`${m.name}を倒した。(Exp ${m.def.exp})`);
   gainExp(m.def.exp);
 }
@@ -209,13 +296,41 @@ function onMonsterAttack(m) {
   say(`${m.name}の攻撃! ${dmg} のダメージ。`);
 }
 
+function showResult(title, cause) {
+  const best = recordBest();
+  removeSave();
+  openMenu({
+    title,
+    lines: [
+      cause,
+      '',
+      `到達階: ${state.floor}F  (最高 ${best}F)`,
+      `レベル ${state.lv}  倒した数 ${state.kills}`,
+      `所持金 ${state.gold}G  ${state.turn} ターン`,
+    ],
+    rows: [{ label: 'もう一度挑戦する', onTap: restart }],
+  });
+}
+
+function restart() {
+  resetRun();
+  say('新しい冒険が始まった。');
+  render();
+}
+
 function die(msg) {
   state.hp = 0;
   state.dead = true;
   aim = null;
-  closeMenu();
+  selecting = false;
   say(msg);
-  say('「足元」で最初からやり直す。');
+  showResult('ゲームオーバー', msg);
+}
+
+function clearGame() {
+  state.cleared = true;
+  say('最深部に到達した!');
+  showResult('踏破!', `${MAX_FLOOR} 階の最深部にたどり着いた。`);
 }
 
 // プレイヤーの 1 行動が終わった後の世界の更新
@@ -347,13 +462,65 @@ function throwItem(it, dx, dy) {
   else say('アイテムは消えてしまった。');
 }
 
+function teleportRandom() {
+  for (let tries = 0; tries < 50; tries++) {
+    const r = rng.pick(state.map.rooms);
+    const x = rng.int(r.x0 + 1, r.x1 - 1);
+    const y = rng.int(r.y0 + 1, r.y1 - 1);
+    if (monsterAt(x, y)) continue;
+    state.x = x;
+    state.y = y;
+    break;
+  }
+  updateVisibility();
+}
+
+// 罠を踏んだ。階を移ったり死んだりして、その後のターン処理が不要なら 'stop' を返す
+function triggerTrap(t) {
+  t.revealed = true;
+  say(`${TRAPS[t.kind].name}を踏んだ!`);
+  switch (t.kind) {
+    case 'pit':
+      state.floor++;
+      newFloor();
+      say(`落とし穴に落ちた! ${state.floor} 階だ。`);
+      return 'stop';
+    case 'arrow': {
+      const dmg = 4 + state.floor;
+      state.hp -= dmg;
+      state.str = Math.max(3, state.str - 1);
+      say(`毒矢が刺さった! ${dmg} のダメージ。力が下がった。`);
+      if (state.hp <= 0) {
+        die('毒矢に倒れた...。');
+        return 'stop';
+      }
+      return null;
+    }
+    case 'gas':
+      say('眠気に襲われて眠り込んでしまった...。');
+      for (let i = 0; i < 5 && !over(); i++) endTurn();
+      return over() ? 'stop' : null;
+    case 'warp':
+      teleportRandom();
+      say('別の場所へワープした。');
+      return null;
+    case 'summon': {
+      const n = summonAround(rng, state, 3);
+      say(n ? 'モンスターが現れた!' : '何も起こらなかった。');
+      return null;
+    }
+  }
+  return null;
+}
+
 function readScroll(it) {
   state.identified.add(it.kind);
   removeItem(it);
   switch (it.kind) {
     case 's_map':
       for (const row of state.seen) row.fill(true);
-      say('この階の地形が頭に浮かんだ。');
+      state.traps.forEach((t) => { t.revealed = true; });
+      say('この階の地形と罠が頭に浮かんだ。');
       break;
     case 's_sleep': {
       const targets = state.monsters.filter((m) => state.visible[m.y][m.x]);
@@ -361,20 +528,10 @@ function readScroll(it) {
       say(targets.length ? '周りのモンスターが眠りに落ちた。' : '何も起こらなかった。');
       break;
     }
-    case 's_teleport': {
-      for (let tries = 0; tries < 50; tries++) {
-        const r = rng.pick(state.map.rooms);
-        const x = rng.int(r.x0 + 1, r.x1 - 1);
-        const y = rng.int(r.y0 + 1, r.y1 - 1);
-        if (monsterAt(x, y)) continue;
-        state.x = x;
-        state.y = y;
-        break;
-      }
-      updateVisibility();
+    case 's_teleport':
+      teleportRandom();
       say('体が別の場所へ飛ばされた。');
       break;
-    }
     case 's_weapon':
     case 's_shield': {
       const target = equipped(it.kind === 's_weapon' ? 'weapon' : 'shield');
@@ -524,7 +681,7 @@ function openInventory() {
 }
 
 function onMove(dx, dy) {
-  if (state.dead || selecting) return;
+  if (over() || selecting) return;
   if (aim) {
     const a = aim;
     aim = null;
@@ -553,7 +710,15 @@ function onMove(dx, dy) {
       state.x = nx;
       state.y = ny;
       updateVisibility();
-      if (!pickupHere() && state.map.tiles[ny][nx] === '>') say('階段がある。');
+      const trap = state.traps.find((t) => t.x === nx && t.y === ny);
+      if (trap) {
+        if (triggerTrap(trap) === 'stop') {
+          render();
+          return;
+        }
+      } else if (!pickupHere() && state.map.tiles[ny][nx] === '>') {
+        say('階段がある。');
+      }
     }
   }
   endTurn();
@@ -562,7 +727,7 @@ function onMove(dx, dy) {
 
 function descend() {
   if (state.floor >= MAX_FLOOR) {
-    say('最深部に到達した!(クリア演出は M5 で追加)');
+    clearGame();
     return;
   }
   state.floor++;
@@ -571,14 +736,7 @@ function descend() {
 }
 
 function onAction(act) {
-  if (state.dead) {
-    if (act === 'floor') {
-      resetRun();
-      say('新しい冒険が始まった。');
-    }
-    render();
-    return;
-  }
+  if (over()) return; // 結果画面の「もう一度挑戦する」だけが操作できる
   if (selecting) return;
   if (aim) {
     aim = null;
@@ -607,11 +765,15 @@ function onAction(act) {
 
 bindInput({ onMove, onAction });
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && isMenuOpen() && !selecting) closeMenu();
+  if (e.key === 'Escape' && isMenuOpen() && !selecting && !over()) closeMenu();
 });
 fitFont();
-resetRun();
-say('ようこそ、rogue-tycoon へ。');
+if (urlSeed || !load()) {
+  resetRun();
+  say('ようこそ、rogue-tycoon へ。');
+} else {
+  say('冒険を再開した。');
+}
 render();
 
 // デバッグ・検証用(コンソールから状態を覗ける)

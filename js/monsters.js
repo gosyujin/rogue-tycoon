@@ -1,5 +1,7 @@
 // モンスター定義と出現
 
+import { isWalkable } from './dungeon.js';
+
 // minFl〜maxFl の階に出現。erratic は不規則に動く
 export const MONSTERS = [
   { ch: 's', name: 'スライム',   hp: 6,   atk: 2,  def: 0, exp: 3,   minFl: 1,  maxFl: 5 },
@@ -18,6 +20,33 @@ export const MONSTERS = [
 
 function makeMonster(def, x, y) {
   return { def, name: def.name, ch: def.ch, hp: def.hp, x, y };
+}
+
+// セーブデータからの復元(定義は ch で引く)
+export function monsterFromSave(s) {
+  const def = MONSTERS.find((d) => d.ch === s.ch);
+  return { ...makeMonster(def, s.x, s.y), hp: s.hp, sleep: s.sleep || 0 };
+}
+
+// 召喚の罠: プレイヤーの周囲の空きマスに最大 n 体を出現させる
+export function summonAround(rng, state, n) {
+  const spots = [];
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = state.x + dx;
+      const y = state.y + dy;
+      if ((dx || dy) && isWalkable(state.map.tiles[y]?.[x] ?? ' ') &&
+          !state.monsters.some((m) => m.x === x && m.y === y)) spots.push({ x, y });
+    }
+  }
+  const pool = candidates(state.floor);
+  let count = 0;
+  while (count < n && spots.length) {
+    const p = spots.splice(rng.int(0, spots.length - 1), 1)[0];
+    state.monsters.push(makeMonster(rng.pick(pool), p.x, p.y));
+    count++;
+  }
+  return count;
 }
 
 function candidates(floor) {
