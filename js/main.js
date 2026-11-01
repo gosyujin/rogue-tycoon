@@ -4,6 +4,8 @@ import { makeRng } from './rng.js';
 import { MAP_W, MAP_H, generateFloor, canStep, isWalkable } from './dungeon.js';
 import { spawnInitial, spawnOne, summonAround, monsterFromSave } from './monsters.js';
 import { TRAPS, spawnTraps } from './traps.js';
+import { loadMeta, saveMeta, startBonus, payout } from './meta.js';
+import { openTown } from './town.js';
 import { monstersAct } from './ai.js';
 import {
   ITEMS, SYMBOL, INV_MAX, SATIETY_MAX,
@@ -26,6 +28,7 @@ const urlSeed = Number(new URLSearchParams(location.search).get('seed')) || 0;
 const newSeed = () => urlSeed || (Date.now() & 0x7fffffff);
 
 const state = {};
+const meta = loadMeta(); // 街の資金・施設・持ち込み品(ランをまたいで残る)
 let rng; // 戦闘など実行中の乱数(階層生成とは別)
 let aim = null; // 方向入力待ち: { kind: 'staff' | 'throw', item }
 let selecting = false; // 識別の巻物で対象を選んでいる間
@@ -61,6 +64,7 @@ function blankState(seed) {
     satiety: SATIETY_MAX,
     dead: false,
     cleared: false,
+    town: false, // 街の画面を出している間は、背後のゲームを動かさず保存もしない
     log: [],
     map: null,
     seen: null,
@@ -78,14 +82,39 @@ function blankState(seed) {
   closeMenu();
 }
 
+// 街の強化と持ち込み品を反映して新しいランを始める
 function resetRun() {
   blankState(newSeed());
+  const { hp, tier } = startBonus(meta);
+  state.maxHp += hp;
+  state.hp = state.maxHp;
   state.inv.push(
-    { kind: 'sword0', plus: 0, equipped: true },
-    { kind: 'shield0', plus: 0, equipped: true },
+    { kind: `sword${tier}`, plus: 0, equipped: true },
+    { kind: `shield${tier}`, plus: 0, equipped: true },
     { kind: 'bread' },
   );
+  for (const kind of meta.kit) {
+    state.inv.push(makeItem(rng, kind, 1));
+    state.identified.add(kind); // 買ったものは正体が分かっている
+  }
+  meta.kit = [];
+  saveMeta(meta);
   newFloor();
+}
+
+// 結果画面から戻る先。背後には描画用の仮のダンジョンを置く
+function goToTown() {
+  blankState(newSeed());
+  newFloor();
+  state.town = true;
+  render();
+  openTown(meta, startRun);
+}
+
+function startRun() {
+  resetRun();
+  say('冒険が始まった。');
+  render();
 }
 
 function say(msg) {
@@ -179,7 +208,7 @@ function render() {
   save();
 }
 
-const over = () => state.dead || state.cleared;
+const over = () => state.dead || state.cleared || state.town;
 
 function readBest() {
   try {
@@ -299,6 +328,9 @@ function onMonsterAttack(m) {
 function showResult(title, cause) {
   const best = recordBest();
   removeSave();
+  const { amount, rate } = payout(meta, state);
+  meta.funds += amount;
+  saveMeta(meta);
   openMenu({
     title,
     lines: [
@@ -307,15 +339,12 @@ function showResult(title, cause) {
       `到達階: ${state.floor}F  (最高 ${best}F)`,
       `レベル ${state.lv}  倒した数 ${state.kills}`,
       `所持金 ${state.gold}G  ${state.turn} ターン`,
+      '',
+      `街へ持ち帰る資金: +${amount}G (所持金の ${Math.round(rate * 100)}% + 階数ボーナス)`,
+      `街の資金 合計 ${meta.funds}G`,
     ],
-    rows: [{ label: 'もう一度挑戦する', onTap: restart }],
+    rows: [{ label: '街へ戻る', onTap: goToTown }],
   });
-}
-
-function restart() {
-  resetRun();
-  say('新しい冒険が始まった。');
-  render();
 }
 
 function die(msg) {
@@ -675,9 +704,34 @@ function openInventory() {
   }
   openMenu({
     title: `持ち物 (${state.inv.length}/${INV_MAX})`,
-    rows: state.inv.map((it, i) => ({ label: `${i + 1}. ${listName(it)}`, onTap: () => openItemMenu(it) })),
+    rows: [
+      { label: '整頓する', onTap: sortInventory },
+      ...state.inv.map((it, i) => ({ label: `${i + 1}. ${listName(it)}`, onTap: () => openItemMenu(it) })),
+    ],
     back: { label: '閉じる', onTap: closeMenu },
   });
+}
+
+// 整頓: 武器 → 盾 → 杖 → 巻物 → 薬草 → 食料の順に、種類ごと・装備中を先頭にまとめる(ターンは消費しない)
+const SORT_ORDER = ['weapon', 'shield', 'staff', 'scroll', 'herb', 'food'];
+const KIND_ORDER = Object.keys(ITEMS);
+
+function sortInventory() {
+  const key = (it) => [
+    SORT_ORDER.indexOf(ITEMS[it.kind].type),
+    it.equipped ? 0 : 1,
+    KIND_ORDER.indexOf(it.kind),
+    -(it.plus || 0),
+  ];
+  state.inv.sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
+    return 0;
+  });
+  say('持ち物を整頓した。');
+  openInventory();
+  render();
 }
 
 function onMove(dx, dy) {
@@ -768,13 +822,15 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && isMenuOpen() && !selecting && !over()) closeMenu();
 });
 fitFont();
-if (urlSeed || !load()) {
-  resetRun();
-  say('ようこそ、rogue-tycoon へ。');
-} else {
+if (urlSeed) {
+  // デバッグ用: シード指定時は街を飛ばして始める
+  startRun();
+} else if (load()) {
   say('冒険を再開した。');
+  render();
+} else {
+  goToTown();
 }
-render();
 
 // デバッグ・検証用(コンソールから状態を覗ける)
 window.__game = {
