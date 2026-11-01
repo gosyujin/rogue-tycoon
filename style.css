@@ -68,6 +68,8 @@ body {
 #map .i { color: #6ae; }
 #map .s { color: #ec6; }
 #map .x { color: #333; }
+#map .c { color: #a98; }
+#map .d { opacity: 0.45; }
 
 #log {
   flex: none;

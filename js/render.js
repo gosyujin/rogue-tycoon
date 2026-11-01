@@ -31,6 +31,7 @@ export function fitFont() {
 const CLASS_OF = {
   '#': 'w',
   '.': 'f',
+  '+': 'c',
   '@': 'p',
   '>': 'i',
   ' ': 'x',
@@ -40,14 +41,15 @@ function esc(ch) {
   return ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch;
 }
 
-// rows: 文字列の配列 (VIEW_H 行)
+// rows: VIEW_H 行の配列。各行は { text: 文字列, dim: 同じ長さの文字列('1' なら記憶のみの暗い表示) }
 export function drawMap(rows) {
   let html = '';
-  for (const row of rows) {
+  for (const { text, dim } of rows) {
     let cur = null;
     let buf = '';
-    for (const ch of row) {
-      const cls = CLASS_OF[ch] ?? (/[a-zA-Z]/.test(ch) ? 'm' : 's');
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const cls = (CLASS_OF[ch] ?? (/[a-zA-Z]/.test(ch) ? 'm' : 's')) + (dim[i] === '1' ? ' d' : '');
       if (cls !== cur) {
         if (buf) html += `<span class="${cur}">${buf}</span>`;
         cur = cls;
