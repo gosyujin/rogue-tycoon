@@ -1,0 +1,118 @@
+:root {
+  --bg: #000;
+  --fg: #ccc;
+  --dim: #667;
+  --wall: #8a8a9a;
+  --floor: #556;
+  --player: #fff;
+  --accent: #6c6;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: env(safe-area-inset-top) 8px env(safe-area-inset-bottom);
+}
+
+#status {
+  flex: none;
+  padding: 6px 0 4px;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre;
+  color: var(--accent);
+}
+
+#map-box {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-top: 1px solid var(--dim);
+  border-bottom: 1px solid var(--dim);
+}
+
+#map {
+  margin: 0;
+  font-family: inherit;
+  line-height: 1;
+  white-space: pre;
+}
+
+#map .w { color: var(--wall); }
+#map .f { color: var(--floor); }
+#map .p { color: var(--player); font-weight: bold; }
+#map .m { color: #e66; }
+#map .i { color: #6ae; }
+#map .s { color: #ec6; }
+#map .x { color: #333; }
+
+#log {
+  flex: none;
+  height: calc(3 * 1.4 * 13px + 8px);
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+#log div:first-child { color: var(--fg); }
+#log div:not(:first-child) { color: var(--dim); }
+
+#controls {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0 10px;
+  gap: 12px;
+}
+
+#dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  width: min(48vw, 210px);
+}
+
+#actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  max-width: 140px;
+}
+
+button {
+  font: inherit;
+  font-size: 20px;
+  color: var(--fg);
+  background: #111;
+  border: 1px solid var(--dim);
+  border-radius: 6px;
+  min-height: 52px;
+  padding: 0;
+}
+button:active { background: #333; }
+#actions button { font-size: 16px; min-height: 56px; }
